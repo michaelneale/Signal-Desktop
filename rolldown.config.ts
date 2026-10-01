@@ -11,6 +11,7 @@ import { transform } from 'oxc-transform';
 const external = [
   // Native libraries
   '@signalapp/libsignal-client',
+  '@mesh-llm/sdk',
   /^@signalapp\/libsignal-client\/.*/,
   '@signalapp/ringrtc',
   '@signalapp/sqlcipher',
@@ -186,6 +187,7 @@ export default defineConfig([
 
       // Workers
       'workers/sql': 'ts/sql/mainWorker.node.ts',
+      'workers/mesh': 'ts/sig/meshWorker.node.ts',
       'workers/heic': 'ts/workers/heicConverterWorker.node.ts',
     },
   },

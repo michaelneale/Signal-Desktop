@@ -54,6 +54,7 @@ import { createLogger } from '../ts/logging/log.std.ts';
 import * as debugLog from '../ts/logging/debuglogs.node.ts';
 import * as uploadDebugLog from '../ts/logging/uploadDebugLog.node.ts';
 import { explodePromise } from '../ts/util/explodePromise.std.ts';
+import { SigMeshWorker } from '../ts/sig/meshMain.main.ts';
 
 import './startup_config.main.ts';
 
@@ -2331,6 +2332,41 @@ app.on('ready', async () => {
 
   log.info('app ready');
   log.info(`starting version ${packageJson.version}`);
+
+  if (process.env.SIG_MESH_SELFTEST === '1') {
+    const inviteToken = process.env.SIG_MESH_INVITE;
+    strictAssert(inviteToken, 'SIG_MESH_INVITE is required for mesh self-test');
+    const mesh = new SigMeshWorker();
+    try {
+      const started = await mesh.call('start', null, inviteToken);
+      log.info('SigMesh self-test started', started);
+      const models = await mesh.call('listModels');
+      strictAssert(models.length > 0, 'SigMesh self-test found no models');
+      log.info('SigMesh self-test models', models.map((model: { id: string }) => model.id));
+      const { requestId } = await mesh.call('chat', models[0].id, [
+        { role: 'user', content: 'Reply with the word pong.' },
+      ]);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setInterval(() => {
+          const events = mesh.events(requestId);
+          if (events.some(event => event.type === 'error')) {
+            clearInterval(timer);
+            reject(new Error('SigMesh self-test chat failed'));
+          } else if (events.some(event => event.type === 'done')) {
+            clearInterval(timer);
+            log.info('SigMesh self-test chat complete', events);
+            resolve();
+          }
+        }, 50);
+      });
+      await mesh.call('stop');
+      log.info('SigMesh self-test passed');
+      await mesh.call('crash');
+    } catch (error) {
+      log.error('SigMesh self-test failed', Errors.toLogFormat(error));
+    }
+  }
+
 
   // This logging helps us debug user reports about broken devices.
   {
