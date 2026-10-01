@@ -2333,6 +2333,30 @@ app.on('ready', async () => {
   log.info('app ready');
   log.info(`starting version ${packageJson.version}`);
 
+  if (process.env.SIG_MESH_WORKER === '1') {
+    const inviteToken = process.env.SIG_MESH_INVITE;
+    if (!inviteToken) {
+      log.error('SIG_MESH_INVITE is required for mesh worker');
+      return;
+    }
+    const mesh = new SigMeshWorker();
+    void mesh
+      .call('start', null, inviteToken)
+      .then(started => {
+        log.info('SigMesh background worker started', started);
+        return mesh.call('listModels');
+      })
+      .then(models => {
+        log.info(
+          'SigMesh background worker models',
+          models.map((model: { id: string }) => model.id)
+        );
+      })
+      .catch(error => {
+        log.error('SigMesh background worker failed', Errors.toLogFormat(error));
+      });
+  }
+
   if (process.env.SIG_MESH_SELFTEST === '1') {
     const inviteToken = process.env.SIG_MESH_INVITE;
     strictAssert(inviteToken, 'SIG_MESH_INVITE is required for mesh self-test');
