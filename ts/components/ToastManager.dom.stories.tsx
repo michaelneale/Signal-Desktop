@@ -198,6 +198,11 @@ function getToast(toastType: ToastType): AnyToast {
       return { toastType: ToastType.MediaNoLongerAvailable };
     case ToastType.MessageBodyTooLong:
       return { toastType: ToastType.MessageBodyTooLong };
+    case ToastType.SigDeclined:
+      return {
+        toastType: ToastType.SigDeclined,
+        parameters: { reason: 'mesh_unavailable' },
+      };
     case ToastType.MessageLoop:
       return { toastType: ToastType.MessageLoop };
     case ToastType.NotificationProfileUpdate:

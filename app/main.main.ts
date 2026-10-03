@@ -55,6 +55,10 @@ import * as debugLog from '../ts/logging/debuglogs.node.ts';
 import * as uploadDebugLog from '../ts/logging/uploadDebugLog.node.ts';
 import { explodePromise } from '../ts/util/explodePromise.std.ts';
 import { SigMeshWorker } from '../ts/sig/meshMain.main.ts';
+import {
+  startSigMeshBridge,
+  type SigMeshPreflightResult,
+} from '../ts/sig/meshBridge.main.ts';
 
 import './startup_config.main.ts';
 
@@ -165,6 +169,8 @@ if (OS.isMacOS()) {
 //   be closed automatically when the JavaScript object is garbage collected.
 let mainWindow: BrowserWindow | undefined;
 let mainWindowCreated = false;
+
+let sigMeshPreflight: Promise<SigMeshPreflightResult> | undefined;
 let loadingWindow: BrowserWindow | undefined;
 
 // These will be set after app fires the 'ready' event
@@ -1033,6 +1039,19 @@ async function createWindow() {
     }
 
     mainWindow.webContents.send('ci:event', 'db-initialized', {});
+    if (sigMeshPreflight) {
+      const preflight = sigMeshPreflight;
+      drop(
+        (async () => {
+          const result = await preflight;
+          mainWindow?.webContents.send(
+            'ci:event',
+            'sig-mesh-preflight',
+            result
+          );
+        })()
+      );
+    }
 
     if (shouldShowWindow) {
       log.info('showing main window');
@@ -2335,26 +2354,11 @@ app.on('ready', async () => {
 
   if (process.env.SIG_MESH_WORKER === '1') {
     const inviteToken = process.env.SIG_MESH_INVITE;
-    if (!inviteToken) {
+    if (inviteToken) {
+      sigMeshPreflight = startSigMeshBridge(inviteToken);
+    } else {
       log.error('SIG_MESH_INVITE is required for mesh worker');
-      return;
     }
-    const mesh = new SigMeshWorker();
-    void mesh
-      .call('start', null, inviteToken)
-      .then(started => {
-        log.info('SigMesh background worker started', started);
-        return mesh.call('listModels');
-      })
-      .then(models => {
-        log.info(
-          'SigMesh background worker models',
-          models.map((model: { id: string }) => model.id)
-        );
-      })
-      .catch(error => {
-        log.error('SigMesh background worker failed', Errors.toLogFormat(error));
-      });
   }
 
   if (process.env.SIG_MESH_SELFTEST === '1') {
@@ -2366,7 +2370,10 @@ app.on('ready', async () => {
       log.info('SigMesh self-test started', started);
       const models = await mesh.call('listModels');
       strictAssert(models.length > 0, 'SigMesh self-test found no models');
-      log.info('SigMesh self-test models', models.map((model: { id: string }) => model.id));
+      log.info(
+        'SigMesh self-test models',
+        models.map((model: { id: string }) => model.id)
+      );
       const { requestId } = await mesh.call('chat', models[0].id, [
         { role: 'user', content: 'Reply with the word pong.' },
       ]);
@@ -2390,7 +2397,6 @@ app.on('ready', async () => {
       log.error('SigMesh self-test failed', Errors.toLogFormat(error));
     }
   }
-
 
   // This logging helps us debug user reports about broken devices.
   {
@@ -3020,6 +3026,7 @@ ipc.on('get-config', async event => {
         ? Environment.PackagedApp
         : getEnvironment(),
     isMockTestEnvironment: Boolean(process.env.MOCK_TEST),
+    sigMesh: process.env.SIG_MESH_WORKER === '1',
     ciMode,
     ciForceUnprocessed: config.get<boolean>('ciForceUnprocessed'),
     devTools: defaultWebPrefs.devTools,

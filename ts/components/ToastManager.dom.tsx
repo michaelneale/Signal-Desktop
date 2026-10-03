@@ -674,6 +674,20 @@ function renderToast({
     return <Toast onClose={hideToast}>{i18n('icu:messageBodyTooLong')}</Toast>;
   }
 
+  if (toastType === ToastType.SigDeclined) {
+    const { reason } = toast.parameters;
+    let key:
+      | 'icu:Sig--toast--empty-prompt'
+      | 'icu:Sig--toast--too-long'
+      | 'icu:Sig--toast--mesh-unavailable' = 'icu:Sig--toast--mesh-unavailable';
+    if (reason === 'empty_prompt') {
+      key = 'icu:Sig--toast--empty-prompt';
+    } else if (reason === 'too_long') {
+      key = 'icu:Sig--toast--too-long';
+    }
+    return <Toast onClose={hideToast}>{i18n(key)}</Toast>;
+  }
+
   if (toastType === ToastType.MessageLoop) {
     return (
       <Toast

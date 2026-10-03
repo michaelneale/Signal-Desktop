@@ -25,14 +25,26 @@ function respond(seq: number, response?: unknown, error?: unknown): void {
     type: 'response',
     seq,
     response,
-    error: error instanceof Error ? error.stack ?? error.message : error ? String(error) : undefined,
+    error:
+      error instanceof Error
+        ? (error.stack ?? error.message)
+        : error
+          ? String(error)
+          : undefined,
   });
 }
 
-async function handle(seq: number, method: string, args: ReadonlyArray<any>): Promise<void> {
+async function handle(
+  seq: number,
+  method: string,
+  args: ReadonlyArray<any>
+): Promise<void> {
   if (method === 'start') {
     const { Client, generateOwnerKeypairHex } = sdk();
-    client = Client.create({ ownerKeypairHex: args[0] ?? generateOwnerKeypairHex(), inviteToken: args[1] });
+    client = Client.create({
+      ownerKeypairHex: args[0] ?? generateOwnerKeypairHex(),
+      inviteToken: args[1],
+    });
     await client.start();
     respond(seq, { versions: process.versions });
     return;

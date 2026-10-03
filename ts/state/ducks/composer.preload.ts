@@ -96,6 +96,11 @@ import { longRunningTaskWrapper } from '../../util/longRunningTaskWrapper.dom.ts
 import { drop } from '../../util/drop.std.ts';
 import { strictAssert } from '../../util/assert.std.ts';
 import { makeQuote } from '../../util/makeQuote.preload.ts';
+import {
+  afterQuestionEnqueued as sigAfterQuestionEnqueued,
+  planSigSend,
+  type SigPlan,
+} from '../../sig/invoke.preload.ts';
 import { sendEditedMessage as doSendEditedMessage } from '../../util/sendEditedMessage.preload.ts';
 import { Sound, SoundType } from '../../util/Sound.std.ts';
 import {
@@ -680,11 +685,41 @@ function sendMultiMediaMessage(
       voiceNoteAttachment,
     } = options;
 
-    const { message = '', bodyRanges } = isViewOnce ? {} : options;
+    const { message: rawMessage = '', bodyRanges } = isViewOnce ? {} : options;
 
     const state = getState();
 
     await withPreSendChecks(conversationId, options, dispatch, async () => {
+      // Sig (Phase 1): decide before anything is enqueued whether this submit
+      // is an `@sig <prompt>` invocation. `passthrough` is the stock path.
+      let message = rawMessage;
+      let sigPlan: SigPlan | undefined;
+      if (window.SignalContext.config.sigMesh) {
+        const conversationComposerStateForSig = getComposerStateForConversation(
+          state.composer,
+          conversationId
+        );
+        sigPlan = await planSigSend(conversation, rawMessage, {
+          bodyRanges,
+          hasAttachments:
+            (draftAttachments?.length ?? 0) > 0 || Boolean(voiceNoteAttachment),
+          isViewOnce,
+          hasQuote: Boolean(conversationComposerStateForSig.quotedMessage),
+        });
+        if (sigPlan.kind === 'reject') {
+          log.info(`sig: declined send (${sigPlan.reason})`);
+          dispatch({
+            type: SHOW_TOAST,
+            payload: {
+              toastType: ToastType.SigDeclined,
+              parameters: { reason: sigPlan.reason },
+            },
+          });
+          return;
+        }
+        message = sigPlan.kind === 'passthrough' ? sigPlan.message : rawMessage;
+      }
+
       let attachments: Array<AttachmentType> = [];
       if (voiceNoteAttachment) {
         attachments = [voiceNoteAttachment];
@@ -711,7 +746,7 @@ function sendMultiMediaMessage(
           : state.items['sent-media-quality'] === 'high';
 
       try {
-        await conversation.enqueueMessageForSend(
+        const sent = await conversation.enqueueMessageForSend(
           {
             body: message,
             attachments,
@@ -746,6 +781,9 @@ function sendMultiMediaMessage(
             },
           }
         );
+        if (sigPlan?.kind === 'invoke') {
+          drop(sigAfterQuestionEnqueued(sigPlan.record, sigPlan.prompt, sent));
+        }
       } catch (error) {
         log.error(
           'Error pulling attached files before send',

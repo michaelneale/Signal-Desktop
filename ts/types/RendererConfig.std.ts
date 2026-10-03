@@ -40,6 +40,7 @@ export const rendererConfigSchema = z.object({
   dnsFallback: DNSFallbackSchema,
   environment: environmentSchema,
   isMockTestEnvironment: z.boolean(),
+  sigMesh: z.boolean(),
   homePath: configRequiredStringSchema,
   hostname: configRequiredStringSchema,
   installPath: configRequiredStringSchema,

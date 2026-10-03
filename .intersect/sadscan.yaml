@@ -1,0 +1,4 @@
+# Signal Technology Foundation's public Federal Tax ID appears in the upstream
+# donation-receipt string (_locales/en/messages.json). It is public, not a secret.
+exclude_rules:
+  - sq.pii.tin.ein

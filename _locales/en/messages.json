@@ -12100,5 +12100,17 @@
   "icu:WhatsNew__8.27--0": {
     "messageformat": "This update introduces more granular settings to give you significantly more control over your Signal notifications. Now you can choose what appears on the app badge, adjust notification preferences for muted threads, and more! We also added a convenient button to restore the default notification settings if you ever make so many changes that you don't even know how to get ahold of yourself anymore.",
     "description": "(Deleted 2026/09/10) Release notes for 8.27"
+  },
+  "icu:Sig--toast--empty-prompt": {
+    "messageformat": "Sig needs a question after @sig.",
+    "description": "Shown when the user sends a bare @sig with no prompt. Nothing is sent."
+  },
+  "icu:Sig--toast--too-long": {
+    "messageformat": "That question is too long for Sig.",
+    "description": "Shown when an @sig prompt exceeds the Sig prompt limit. Nothing is sent."
+  },
+  "icu:Sig--toast--mesh-unavailable": {
+    "messageformat": "Sig can't reach the mesh right now. Your message was not sent.",
+    "description": "Shown when the mesh preflight fails before an @sig question is posted."
   }
 }

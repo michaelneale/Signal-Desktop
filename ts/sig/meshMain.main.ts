@@ -4,17 +4,26 @@
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { getAppRootDir } from '../util/appRootDir.main.ts';
+import { createLogger } from '../logging/log.std.ts';
+import * as Errors from '../types/errors.std.ts';
+
+const log = createLogger('sig/meshMain');
 
 export class SigMeshWorker {
   readonly #worker: Worker;
-  readonly #pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
+  readonly #pending = new Map<
+    number,
+    { resolve: (value: any) => void; reject: (error: Error) => void }
+  >();
   readonly #events = new Map<string, Array<any>>();
   #seq = 0;
 
   constructor() {
-    this.#worker = new Worker(join(getAppRootDir(), 'bundles', 'workers', 'mesh.js'));
+    this.#worker = new Worker(
+      join(getAppRootDir(), 'bundles', 'workers', 'mesh.js')
+    );
     this.#worker.on('error', error => {
-      console.error('Sig mesh worker error', error);
+      log.error('Sig mesh worker error', Errors.toLogFormat(error));
     });
     this.#worker.on('message', message => {
       if (message.type !== 'response') {
@@ -33,13 +42,15 @@ export class SigMeshWorker {
       const error = new Error(`Sig mesh worker exited with code ${code}`);
       for (const pending of this.#pending.values()) pending.reject(error);
       this.#pending.clear();
-      console.error(error.message);
+      log.error(error.message);
     });
   }
 
   call(method: string, ...args: ReadonlyArray<any>): Promise<any> {
     const seq = ++this.#seq;
-    const result = new Promise((resolve, reject) => this.#pending.set(seq, { resolve, reject }));
+    const result = new Promise((resolve, reject) =>
+      this.#pending.set(seq, { resolve, reject })
+    );
     this.#worker.postMessage({ seq, method, args });
     return result;
   }

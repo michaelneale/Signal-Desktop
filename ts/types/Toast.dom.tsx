@@ -81,6 +81,7 @@ export enum ToastType {
   ReportedSpam = 'ReportedSpam',
   RemoteConfigChanged = 'RemoteConfigChanged',
   ReportedSpamAndBlocked = 'ReportedSpamAndBlocked',
+  SigDeclined = 'SigDeclined',
   SQLError = 'SQLError',
   StickerPackInstallFailed = 'StickerPackInstallFailed',
   StoryMuted = 'StoryMuted',
@@ -212,6 +213,10 @@ export type AnyToast =
   | { toastType: ToastType.MaxAttachments }
   | { toastType: ToastType.MediaNoLongerAvailable }
   | { toastType: ToastType.MessageBodyTooLong }
+  | {
+      toastType: ToastType.SigDeclined;
+      parameters: { reason: 'empty_prompt' | 'too_long' | 'mesh_unavailable' };
+    }
   | { toastType: ToastType.MessageLoop }
   | {
       toastType: ToastType.NotificationProfileUpdate;
