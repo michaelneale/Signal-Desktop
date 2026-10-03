@@ -117,6 +117,12 @@ export class App extends EventEmitter {
     return this.#waitForEvent('db-initialized');
   }
 
+  public async waitForSigMeshPreflight(): Promise<
+    { ok: true; models: ReadonlyArray<string> } | { ok: false; error: string }
+  > {
+    return this.#waitForEvent('sig-mesh-preflight');
+  }
+
   public async waitUntilReadyForUpdates(): Promise<void> {
     return this.#waitForEvent('ready-for-updates');
   }
