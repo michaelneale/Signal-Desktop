@@ -19,6 +19,7 @@ import { isMember } from '../util/groupMembershipUtils.preload.ts';
 import { makeQuote } from '../util/makeQuote.preload.ts';
 import { itemStorage } from '../textsecure/Storage.preload.ts';
 import { parseSigInvocation } from './parse.std.ts';
+import { SigLocalBubble } from './localBubble.preload.ts';
 
 const log = createLogger('sig/invoke');
 
@@ -35,8 +36,32 @@ type AskResult =
       answer: string;
       firstChunkMs: number;
       totalMs: number;
+      cancelled: boolean;
     }
   | { ok: false; error: string };
+
+type Chunk = { askId: string; text: string };
+
+const THINKING = 'sig · thinking…';
+const STOP_HINT = '\n\n(type @sig stop to cancel)';
+// Mirrors contract §2.1: a `stop` prompt is a local command, never a question.
+const STOP_PROMPT = /^stop$/iu;
+
+// askId -> live local bubble, for `sig:chunk` delivery.
+const bubbles = new Map<string, SigLocalBubble>();
+// conversationId -> askId of the in-flight invocation, for `@sig stop`.
+const inflightByConversation = new Map<string, string>();
+
+ipcRenderer.on('sig:chunk', (_event, chunk: Chunk) => {
+  const bubble = bubbles.get(chunk.askId);
+  if (!bubble) {
+    return;
+  }
+  const text = chunk.text.trim();
+  bubble.update(
+    text.length > 0 ? `${text} ▌${STOP_HINT}` : THINKING + STOP_HINT
+  );
+});
 
 // Contract §5: the invocation record and its states. Phase 1 keeps the
 // records in memory only; restart semantics (§5.2) therefore reduce to
@@ -90,7 +115,7 @@ export type SigPlan =
   | { kind: 'passthrough'; message: string }
   | {
       kind: 'reject';
-      reason: 'empty_prompt' | 'too_long' | 'mesh_unavailable';
+      reason: 'empty_prompt' | 'too_long' | 'mesh_unavailable' | 'stopped';
       detail?: string;
     }
   | { kind: 'invoke'; record: SigInvocationRecord; prompt: string };
@@ -132,6 +157,18 @@ export async function planSigSend(
   const groupId = conversation.get('groupId');
   if (!groupId) {
     return { kind: 'passthrough', message };
+  }
+
+  // `@sig stop`: cancel the in-flight ask in this group, post nothing.
+  // Without an in-flight ask it is just chat (someone may mean the word).
+  if (STOP_PROMPT.test(parsed.prompt)) {
+    const askId = inflightByConversation.get(conversation.id);
+    if (!askId) {
+      return { kind: 'passthrough', message };
+    }
+    await ipcRenderer.invoke('sig:cancel', askId);
+    log.info(`stop requested for ${askId}`);
+    return { kind: 'reject', reason: 'stopped' };
   }
 
   const record: SigInvocationRecord = {
@@ -218,18 +255,35 @@ export async function afterQuestionEnqueued(
   }
 
   // While the model thinks the group sees the requester's ordinary typing
-  // indicator — the same thing a stock client sends — and nothing else.
+  // indicator — the same thing a stock client sends — and nothing else. The
+  // requester additionally sees a local-only bubble that streams the answer.
   conversation.bumpTyping();
   const typing = setInterval(() => conversation.bumpTyping(), 2_000);
   transition(record, 'inference_started');
 
+  const askId = record.invocationId;
+  let bubble: SigLocalBubble | undefined;
+  try {
+    bubble = await SigLocalBubble.create(conversation, THINKING + STOP_HINT);
+    bubbles.set(askId, bubble);
+  } catch (error) {
+    // The bubble is a courtesy; the invocation proceeds without it.
+    log.error('local bubble failed', Errors.toLogFormat(error));
+  }
+  inflightByConversation.set(conversation.id, askId);
+
   let result: AskResult;
   try {
-    result = (await ipcRenderer.invoke('sig:ask', prompt)) as AskResult;
+    result = (await ipcRenderer.invoke('sig:ask', prompt, askId)) as AskResult;
   } catch (error) {
     result = { ok: false, error: Errors.toLogFormat(error) };
   } finally {
     clearInterval(typing);
+    bubbles.delete(askId);
+    if (inflightByConversation.get(conversation.id) === askId) {
+      inflightByConversation.delete(conversation.id);
+    }
+    await bubble?.remove();
   }
 
   if (!result.ok) {
@@ -237,6 +291,11 @@ export async function afterQuestionEnqueued(
       code: 'inference_failed',
       message: result.error,
     });
+    return;
+  }
+  if (result.cancelled) {
+    // §5: cancel is local-only; the group sees nothing further.
+    transition(record, 'cancelled');
     return;
   }
   transition(record, 'final_ready');

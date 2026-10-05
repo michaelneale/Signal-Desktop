@@ -12112,5 +12112,9 @@
   "icu:Sig--toast--mesh-unavailable": {
     "messageformat": "Sig can't reach the mesh right now. Your message was not sent.",
     "description": "Shown when the mesh preflight fails before an @sig question is posted."
+  },
+  "icu:Sig--toast--stopped": {
+    "messageformat": "Sig stopped. Nothing was posted.",
+    "description": "Shown after the user types @sig stop while Sig is answering. Nothing is sent."
   }
 }

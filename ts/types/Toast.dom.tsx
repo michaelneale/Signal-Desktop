@@ -215,7 +215,9 @@ export type AnyToast =
   | { toastType: ToastType.MessageBodyTooLong }
   | {
       toastType: ToastType.SigDeclined;
-      parameters: { reason: 'empty_prompt' | 'too_long' | 'mesh_unavailable' };
+      parameters: {
+        reason: 'empty_prompt' | 'too_long' | 'mesh_unavailable' | 'stopped';
+      };
     }
   | { toastType: ToastType.MessageLoop }
   | {

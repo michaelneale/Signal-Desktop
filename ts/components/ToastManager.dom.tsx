@@ -679,8 +679,11 @@ function renderToast({
     let key:
       | 'icu:Sig--toast--empty-prompt'
       | 'icu:Sig--toast--too-long'
-      | 'icu:Sig--toast--mesh-unavailable' = 'icu:Sig--toast--mesh-unavailable';
-    if (reason === 'empty_prompt') {
+      | 'icu:Sig--toast--mesh-unavailable'
+      | 'icu:Sig--toast--stopped' = 'icu:Sig--toast--mesh-unavailable';
+    if (reason === 'stopped') {
+      key = 'icu:Sig--toast--stopped';
+    } else if (reason === 'empty_prompt') {
       key = 'icu:Sig--toast--empty-prompt';
     } else if (reason === 'too_long') {
       key = 'icu:Sig--toast--too-long';

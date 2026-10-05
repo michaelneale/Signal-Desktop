@@ -7,6 +7,7 @@
 // (ts/sig/invoke.preload.ts) decides what gets posted.
 
 import { ipcMain as ipc } from 'electron';
+import type { WebContents } from 'electron';
 import { createLogger } from '../logging/log.std.ts';
 import * as Errors from '../types/errors.std.ts';
 import { drop } from '../util/drop.std.ts';
@@ -25,8 +26,17 @@ export type SigAskResult =
       answer: string;
       firstChunkMs: number;
       totalMs: number;
+      cancelled: boolean;
     }
   | { ok: false; error: string };
+
+// Streamed to the renderer on the `sig:chunk` channel while an ask is in
+// flight; `text` is the visible answer so far (thinking stripped), not a delta.
+export type SigChunk = { askId: string; text: string };
+
+// askId (minted by the renderer) -> mesh worker requestId, for cancel.
+const inflight = new Map<string, string>();
+const cancelled = new Set<string>();
 
 const PREFLIGHT_TIMEOUT_MS = 3_000;
 const ASK_TIMEOUT_MS = 120_000;
@@ -124,7 +134,11 @@ function stripThinking(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gu, '').trim();
 }
 
-async function ask(prompt: string): Promise<SigAskResult> {
+async function ask(
+  prompt: string,
+  askId: string,
+  sender: WebContents
+): Promise<SigAskResult> {
   const mesh = worker;
   if (!mesh) {
     return { ok: false, error: 'Sig mesh worker is not enabled' };
@@ -149,8 +163,15 @@ async function ask(prompt: string): Promise<SigAskResult> {
       },
       { role: 'user', content: prompt },
     ]);
+    inflight.set(askId, requestId);
+    if (cancelled.has(askId)) {
+      // Stop arrived before the request id existed.
+      await mesh.call('cancel', requestId);
+    }
     const answer = await withTimeout(
       new Promise<string>((resolve, reject) => {
+        let seen = 0;
+        let sentText = '';
         const timer = setInterval(() => {
           const events = mesh.events(requestId);
           if (
@@ -165,6 +186,15 @@ async function ask(prompt: string): Promise<SigAskResult> {
             reject(new Error(String(failure.error ?? 'chat failed')));
             return;
           }
+          if (events.length > seen) {
+            seen = events.length;
+            const text = visibleText(events.map(extractDelta).join(''));
+            if (text !== sentText && !sender.isDestroyed()) {
+              sentText = text;
+              const chunk: SigChunk = { askId, text };
+              sender.send('sig:chunk', chunk);
+            }
+          }
           if (events.some(event => event.type === 'done')) {
             clearInterval(timer);
             resolve(events.map(extractDelta).join(''));
@@ -175,8 +205,9 @@ async function ask(prompt: string): Promise<SigAskResult> {
       'chat'
     );
     const totalMs = Date.now() - startedAt;
+    const wasCancelled = cancelled.has(askId);
     log.info(
-      `ask: model=${model} chars=${answer.length} firstChunkMs=${(firstChunkAt ?? startedAt) - startedAt} totalMs=${totalMs}`
+      `ask: model=${model} chars=${answer.length} firstChunkMs=${(firstChunkAt ?? startedAt) - startedAt} totalMs=${totalMs} cancelled=${wasCancelled}`
     );
     return {
       ok: true,
@@ -184,10 +215,39 @@ async function ask(prompt: string): Promise<SigAskResult> {
       answer: stripThinking(answer),
       firstChunkMs: (firstChunkAt ?? startedAt) - startedAt,
       totalMs,
+      cancelled: wasCancelled,
     };
   } catch (error) {
     log.error('ask failed', Errors.toLogFormat(error));
     return { ok: false, error: Errors.toLogFormat(error) };
+  } finally {
+    inflight.delete(askId);
+    cancelled.delete(askId);
+  }
+}
+
+// Thinking is stripped once closed; while the model is still inside a
+// <think> block the visible text is whatever preceded it (usually nothing).
+function visibleText(raw: string): string {
+  const open = raw.lastIndexOf('<think>');
+  const close = raw.lastIndexOf('</think>');
+  if (open !== -1 && close < open) {
+    return stripThinking(raw.slice(0, open));
+  }
+  return stripThinking(raw);
+}
+
+async function cancel(askId: string): Promise<{ cancelled: boolean }> {
+  cancelled.add(askId);
+  const requestId = inflight.get(askId);
+  if (!worker || !requestId) {
+    return { cancelled: false };
+  }
+  try {
+    return await worker.call('cancel', requestId);
+  } catch (error) {
+    log.error('cancel failed', Errors.toLogFormat(error));
+    return { cancelled: false };
   }
 }
 
@@ -205,11 +265,17 @@ export function startSigMeshBridge(
   );
 
   ipc.handle('sig:preflight', () => checkMesh());
-  ipc.handle('sig:ask', (_event, prompt: unknown) => {
-    if (typeof prompt !== 'string') {
-      return { ok: false, error: 'prompt must be a string' };
+  ipc.handle('sig:ask', (event, prompt: unknown, askId: unknown) => {
+    if (typeof prompt !== 'string' || typeof askId !== 'string') {
+      return { ok: false, error: 'prompt and askId must be strings' };
     }
-    return ask(prompt);
+    return ask(prompt, askId, event.sender);
+  });
+  ipc.handle('sig:cancel', (_event, askId: unknown) => {
+    if (typeof askId !== 'string') {
+      return { cancelled: false };
+    }
+    return cancel(askId);
   });
 
   return preflight;
