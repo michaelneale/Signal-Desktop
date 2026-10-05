@@ -1,4 +1,4 @@
-// Copyright 2026 Signal Messenger, LLC
+// Copyright 2026 Michael Neale
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { parentPort } from 'node:worker_threads';

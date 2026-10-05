@@ -1,4 +1,4 @@
-// Copyright 2026 Signal Messenger, LLC
+// Copyright 2026 Michael Neale
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // A local-only timeline bubble used while Sig is streaming an answer. It is a

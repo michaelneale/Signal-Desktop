@@ -1,4 +1,4 @@
-// Copyright 2026 Signal Messenger, LLC
+// Copyright 2026 Michael Neale
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Renderer side of the Phase 1 Sig loop (PLANS/SIG_PHASE1_INVOCATION_CONTRACT.md).

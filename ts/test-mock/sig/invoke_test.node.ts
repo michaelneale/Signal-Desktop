@@ -1,4 +1,4 @@
-// Copyright 2026 Signal Messenger, LLC
+// Copyright 2026 Michael Neale
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Phase 1 Sig loop end to end on the mock server: two linked Desktop
