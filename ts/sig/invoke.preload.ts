@@ -18,6 +18,8 @@ import { isGroupV2 } from '../util/whatTypeOfConversation.dom.ts';
 import { isMember } from '../util/groupMembershipUtils.preload.ts';
 import { makeQuote } from '../util/makeQuote.preload.ts';
 import { itemStorage } from '../textsecure/Storage.preload.ts';
+import { DataReader } from '../sql/Client.preload.ts';
+import { isIncoming } from '../messages/helpers.std.ts';
 import { parseSigInvocation } from './parse.std.ts';
 import { SigLocalBubble } from './localBubble.preload.ts';
 
@@ -41,6 +43,13 @@ type AskResult =
   | { ok: false; error: string };
 
 type Chunk = { askId: string; text: string };
+type ToolRequest = {
+  askId: string;
+  callId: string;
+  name: string;
+  args: Record<string, unknown>;
+};
+type ToolResult = { ok: true; content: string } | { ok: false; error: string };
 
 const THINKING = 'sig · thinking…';
 const STOP_HINT = '\n\n(type @sig stop to cancel)';
@@ -51,6 +60,12 @@ const STOP_PROMPT = /^stop$/iu;
 const bubbles = new Map<string, SigLocalBubble>();
 // conversationId -> askId of the in-flight invocation, for `@sig stop`.
 const inflightByConversation = new Map<string, string>();
+// askId -> where the question lives, so a `sig:tool` request can only ever
+// read the group it was asked in (and never the question or the bubble).
+const askContext = new Map<
+  string,
+  { conversationId: string; excludeIds: ReadonlySet<string> }
+>();
 
 ipcRenderer.on('sig:chunk', (_event, chunk: Chunk) => {
   const bubble = bubbles.get(chunk.askId);
@@ -62,6 +77,95 @@ ipcRenderer.on('sig:chunk', (_event, chunk: Chunk) => {
     text.length > 0 ? `${text} ▌${STOP_HINT}` : THINKING + STOP_HINT
   );
 });
+
+// GDK agent path: the main process has already obtained the requester's
+// consent; this is the only code that reads Signal messages for Sig, and it
+// reads only the group the question was asked in.
+ipcRenderer.on('sig:tool', (_event, request: ToolRequest) => {
+  void (async () => {
+    let result: ToolResult;
+    try {
+      result = { ok: true, content: await runTool(request) };
+    } catch (error) {
+      result = { ok: false, error: Errors.toLogFormat(error) };
+    }
+    await ipcRenderer.invoke(
+      'sig:tool_result',
+      request.askId,
+      request.callId,
+      result
+    );
+  })();
+});
+
+const GROUP_CONTEXT_MAX = 50;
+const GROUP_CONTEXT_LINE_MAX = 500;
+
+async function runTool(request: ToolRequest): Promise<string> {
+  if (request.name !== 'group_context') {
+    throw new Error(`unknown tool ${request.name}`);
+  }
+  const context = askContext.get(request.askId);
+  if (!context) {
+    throw new Error('no in-flight invocation for this tool call');
+  }
+  const count = Math.min(
+    Math.max(Math.trunc(Number(request.args.count) || 20), 1),
+    GROUP_CONTEXT_MAX
+  );
+  bubbles
+    .get(request.askId)
+    ?.update(`sig · reading the last ${count} messages…${STOP_HINT}`);
+  const lines = await readGroupContext(context, count);
+  log.info(
+    `group_context: askId=${request.askId} requested=${count} returned=${lines.length}`
+  );
+  return lines.length > 0
+    ? lines.join('\n')
+    : '(no earlier text messages in this group)';
+}
+
+// Oldest first, text bodies only, excluding the question itself and Sig's own
+// local bubble. Names are the requester's local display names for the
+// members — the same thing they see on screen.
+async function readGroupContext(
+  context: { conversationId: string; excludeIds: ReadonlySet<string> },
+  count: number
+): Promise<Array<string>> {
+  const ourId = window.ConversationController.getOurConversationIdOrThrow();
+  const messages = await DataReader.getOlderMessagesByConversation({
+    conversationId: context.conversationId,
+    includeStoryReplies: false,
+    limit: count + context.excludeIds.size,
+    storyId: undefined,
+  });
+  const lines: Array<string> = [];
+  for (const message of messages) {
+    if (context.excludeIds.has(message.id)) {
+      continue;
+    }
+    const body = message.body?.trim();
+    if (!body) {
+      continue;
+    }
+    const authorId = isIncoming(message)
+      ? window.ConversationController.lookupOrCreate({
+          serviceId: message.sourceServiceId,
+          e164: message.source,
+          reason: 'sig/group_context',
+        })?.id
+      : ourId;
+    const author = authorId
+      ? window.ConversationController.get(authorId)?.getTitle({ isShort: true })
+      : undefined;
+    const text =
+      body.length > GROUP_CONTEXT_LINE_MAX
+        ? `${body.slice(0, GROUP_CONTEXT_LINE_MAX)}…`
+        : body;
+    lines.push(`[${author ?? 'someone'}] ${text}`);
+  }
+  return lines.slice(-count);
+}
 
 // Contract §5: the invocation record and its states. Phase 1 keeps the
 // records in memory only; restart semantics (§5.2) therefore reduce to
@@ -271,6 +375,12 @@ export async function afterQuestionEnqueued(
     log.error('local bubble failed', Errors.toLogFormat(error));
   }
   inflightByConversation.set(conversation.id, askId);
+  askContext.set(askId, {
+    conversationId: conversation.id,
+    excludeIds: new Set(
+      [question.id, bubble?.id].filter((id): id is string => Boolean(id))
+    ),
+  });
 
   let result: AskResult;
   try {
@@ -280,6 +390,7 @@ export async function afterQuestionEnqueued(
   } finally {
     clearInterval(typing);
     bubbles.delete(askId);
+    askContext.delete(askId);
     if (inflightByConversation.get(conversation.id) === askId) {
       inflightByConversation.delete(conversation.id);
     }
