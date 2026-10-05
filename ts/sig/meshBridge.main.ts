@@ -60,14 +60,32 @@ async function runPreflight(
 ): Promise<SigMeshPreflightResult> {
   try {
     await mesh.call('start', null, inviteToken);
-    const models = await mesh.call('listModels');
-    return {
-      ok: true,
-      models: models.map((model: { id: string }) => model.id),
-    };
+    return modelsResult(await mesh.call('listModels'));
   } catch (error) {
     return { ok: false, error: Errors.toLogFormat(error) };
   }
+}
+
+// A host that answers but advertises nothing (still loading its model, or a
+// client-only node) is not a usable mesh: the question must not be posted.
+function modelsResult(
+  models: ReadonlyArray<{ id: string }>
+): SigMeshPreflightResult {
+  const ids = orderModels(models.map(model => model.id));
+  if (ids.length === 0) {
+    return { ok: false, error: 'mesh advertised no models' };
+  }
+  return { ok: true, models: ids };
+}
+
+// SIG_MESH_MODEL (optional) names the preferred model; it is moved to the
+// front so `models[0]` stays the single selection rule (contract §4).
+function orderModels(ids: ReadonlyArray<string>): Array<string> {
+  const preferred = process.env.SIG_MESH_MODEL;
+  if (!preferred || !ids.includes(preferred)) {
+    return [...ids];
+  }
+  return [preferred, ...ids.filter(id => id !== preferred)];
 }
 
 // Re-checks the mesh right before a question is posted (contract §4): a warm
@@ -81,15 +99,13 @@ async function checkMesh(): Promise<SigMeshPreflightResult> {
     return launch;
   }
   try {
-    const models = await withTimeout(
-      worker.call('listModels'),
-      PREFLIGHT_TIMEOUT_MS,
-      'listModels'
+    return modelsResult(
+      await withTimeout(
+        worker.call('listModels'),
+        PREFLIGHT_TIMEOUT_MS,
+        'listModels'
+      )
     );
-    return {
-      ok: true,
-      models: models.map((model: { id: string }) => model.id),
-    };
   } catch (error) {
     return { ok: false, error: Errors.toLogFormat(error) };
   }
