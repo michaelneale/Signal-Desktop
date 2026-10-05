@@ -1,0 +1,31 @@
+[package]
+name = "sig-agent"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+authors = ["Michael Neale <14976+michaelneale@users.noreply.github.com>"]
+description = "Sig's GDK agent loop: goose provider/types over a mesh OpenAI-compatible endpoint, tool calls handed to the host app over stdio"
+publish = false
+
+[[bin]]
+name = "sig-agent"
+path = "src/main.rs"
+
+[dependencies]
+# GDK crates. Keep every goose crate on the exact same revision so shared
+# types stay unified (the same convention as buzz-agent).
+goose-provider-types = { git = "https://github.com/aaif-goose/goose", rev = "2f2c92c24c1438cef142476ee6507df82e6c3fba" }
+goose-providers = { git = "https://github.com/aaif-goose/goose", rev = "2f2c92c24c1438cef142476ee6507df82e6c3fba", default-features = false, features = ["rustls-tls"] }
+rmcp = { version = "3", default-features = false }
+
+anyhow = "1"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "time"] }
+tokio-util = "0.7"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

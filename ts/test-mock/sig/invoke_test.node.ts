@@ -84,10 +84,13 @@ describe('sig invoke', function sigInvoke(this: Mocha.Suite) {
   const UP_TEST = 'posts the question and one quoted reply into the group';
   const STOP_TEST = 'stops on @sig stop and posts nothing further';
   const DOWN_TEST = 'sends nothing when the mesh is unreachable';
+  const AGENT_TEST =
+    'answers a question about the conversation through the GDK agent and group_context';
   const TEST_FOR_EXPECT: Record<string, string> = {
     up: UP_TEST,
     stop: STOP_TEST,
     down: DOWN_TEST,
+    agent: AGENT_TEST,
   };
 
   beforeEach(async function before(this: Mocha.Context) {
@@ -240,14 +243,113 @@ describe('sig invoke', function sigInvoke(this: Mocha.Suite) {
       path.join(bootstrap2.logsDir, 'main.log'),
       'utf8'
     );
-    assert(!main2.includes('ask: model='), 'peer ran inference');
+    assert(!/ask(Agent)?: model=/u.test(main2), 'peer ran inference');
     const main1 = await readFile(
       path.join(bootstrap1.logsDir, 'main.log'),
       'utf8'
     );
-    assert(main1.includes('ask: model='), 'requester did not run inference');
+    assert(
+      /ask(Agent)?: model=/u.test(main1),
+      'requester did not run inference'
+    );
 
     // Linger so the recording shows the settled state.
+    if (process.env.SIG_DEMO_FRAMES_DIR) {
+      await new Promise(resolve => setTimeout(resolve, 3_000));
+    }
+    stopFrames();
+  });
+
+  // GDK agent path (SIG_AGENT_BIN + SIG_AGENT_BASE_URL, SIG_AGENT_CONSENT=allow
+  // standing in for the requester's click): the peer says where to meet, the
+  // requester asks Sig about it, the model has to call group_context to know,
+  // and the reply names the place. Only the requester's device reads the
+  // group; the peer never runs anything.
+  it(AGENT_TEST, async () => {
+    assert(
+      process.env.SIG_AGENT_BIN && process.env.SIG_AGENT_BASE_URL,
+      'SIG_AGENT_BIN and SIG_AGENT_BASE_URL are required'
+    );
+    const [pre1, pre2] = await Promise.all([
+      app1.waitForSigMeshPreflight(),
+      app2.waitForSigMeshPreflight(),
+    ]);
+    assert(pre1.ok, `app1 preflight: ${JSON.stringify(pre1)}`);
+    assert(pre2.ok, `app2 preflight: ${JSON.stringify(pre2)}`);
+
+    const window1 = await app1.getWindow();
+    const window2 = await app2.getWindow();
+    const stopFrames = startFrameCapture([window1, window2]);
+    await window1
+      .locator('#LeftPane')
+      .locator(`[data-testid="${group.id}"]`)
+      .click();
+    await window2
+      .locator('#LeftPane')
+      .locator(`[data-testid="${group.id}"]`)
+      .click();
+
+    debug('peer sets the context');
+    const plan = [
+      "Let's meet Friday at the Royal Hotel on George Street",
+      'Say 7pm, and I will bring the projector',
+    ];
+    for (const line of plan) {
+      await typeIntoInput(await waitForEnabledComposer(window2), line, '');
+      await (await waitForEnabledComposer(window2)).press('Enter');
+      await window1.locator(`.module-message__text >> "${line}"`).waitFor();
+    }
+
+    const question = '@sig Where and when are we meeting? One sentence.';
+    debug('send @sig question');
+    await typeIntoInput(await waitForEnabledComposer(window1), question, '');
+    await (await waitForEnabledComposer(window1)).press('Enter');
+    await window2.locator(`.module-message__text >> "${question}"`).waitFor();
+
+    const streaming1 = window1
+      .locator('.module-message--outgoing')
+      .filter({ hasText: 'type @sig stop to cancel' });
+    await streaming1.waitFor({ timeout: 30 * durations.SECOND });
+
+    debug('peer sees a reply that names the place');
+    const reply2 = window2
+      .locator('.module-message--incoming')
+      .filter({ hasText: 'sig · requested by' })
+      .filter({ hasText: /Royal/u });
+    await reply2.waitFor({ timeout: 120 * durations.SECOND });
+    await reply2
+      .locator('.module-quote')
+      .filter({ hasText: question })
+      .waitFor();
+    await streaming1.waitFor({
+      state: 'detached',
+      timeout: 10 * durations.SECOND,
+    });
+
+    const main1 = await readFile(
+      path.join(bootstrap1.logsDir, 'main.log'),
+      'utf8'
+    );
+    assert(
+      main1.includes('runTool: group_context'),
+      'requester did not run the group_context tool'
+    );
+    const turn = /askAgent: model=.* toolCalls=(\d+)/u.exec(main1);
+    assert(turn && Number(turn[1]) >= 1, `agent turn log: ${turn?.[0]}`);
+    const app1Log = await readFile(
+      path.join(bootstrap1.logsDir, 'app.log'),
+      'utf8'
+    );
+    assert(
+      app1Log.includes('group_context: askId='),
+      'renderer did not read the group'
+    );
+    const main2 = await readFile(
+      path.join(bootstrap2.logsDir, 'main.log'),
+      'utf8'
+    );
+    assert(!main2.includes('askAgent'), 'peer ran the agent');
+    assert(!main2.includes('runTool'), 'peer ran a tool');
     if (process.env.SIG_DEMO_FRAMES_DIR) {
       await new Promise(resolve => setTimeout(resolve, 3_000));
     }
